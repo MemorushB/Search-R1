@@ -3,12 +3,30 @@ import torch
 import random
 from datasets import load_dataset
 import requests
+import os
+from datetime import datetime
+import re
 
-question = "Mike Barnett negotiated many contracts including which player that went on to become general manager of CSKA Moscow of the Kontinental Hockey League?"
-
+# question = "How does the Court determine whether a surveillance measure falls within the scope of article 8 of the ECHR, and what conditions must be met for such interference to be considered ""necessary in a democratic society""?"
+question = "How does the Court determine whether a surveillance measure falls within the scope of the convention?"
 # Model ID and device setup
-model_id = "PeterJinGo/SearchR1-nq_hotpotqa_train-qwen2.5-7b-em-ppo"
+model_id = "PeterJinGo/SearchR1-nq_hotpotqa_train-qwen2.5-32b-em-grpo-v0.3"
+# model_id = "PeterJinGo/SearchR1-nq_hotpotqa_train-qwen2.5-14b-em-ppo-v0.3"
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+log_dir = "inference_logs"
+os.makedirs(log_dir, exist_ok=True)
+
+
+timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+log_file = os.path.join(log_dir, f"inference_log_{timestamp}.txt")
+
+def print_and_log(text, file_handle=None):
+    """Print to console and log to file"""
+    print(text)
+    if file_handle:
+        file_handle.write(text + "\n")
+        file_handle.flush()  # Ensure immediate write to file
 
 question = question.strip()
 if question[-1] != '?':
@@ -17,15 +35,45 @@ curr_eos = [151645, 151643] # for Qwen2.5 series models
 curr_search_template = '\n\n{output_text}<information>{search_results}</information>\n\n'
 
 # Prepare the message
-prompt = f"""Answer the given question. \
-You must conduct reasoning inside <think> and </think> first every time you get new information. \
-After reasoning, if you find you lack some knowledge, you can call a search engine by <search> query </search> and it will return the top searched results between <information> and </information>. \
-You can search as many times as your want. \
-If you find no further external knowledge needed, you can directly provide the answer inside <answer> and </answer>, without detailed illustrations. For example, <answer> Beijing </answer>. Question: {question}\n"""
+prompt = f"""Answer the following question.
+
+You must conduct all reasoning inside <think> … </think> each time you receive new information.
+
+If you need outside knowledge, issue a search as
+<search> your query </search>
+The engine will reply with
+<information> … </information>
+You may search as many times as necessary.
+
+When you have gathered sufficient facts, draft the substantive reply inside
+<answer> … </answer> only.
+
+Guidelines for <answer>  
+1. Format: 3-7 crisp bullet points **or** 3-6 lean sentences.  
+2. Cover **every** sub-issue raised (e.g. scope/interference or positive obligation, legality, legitimate aim, necessity, proportionality, safeguards, balancing). Do **not** omit anything.  
+3. Paraphrase the prompt—avoid re-using its wording.  
+4. Where helpful, cite 1-2 illustrative Strasbourg cases in-line but keep them brief.  
+
+Example (two-part question)  
+
+<answer>  
+• Criterion A …  
+• Criterion B … 
+• Criterion C …
+• Criterion D …
+• Illustrative case: *Example v State* § 00.  
+</answer>
+
+Question: {question}\n"""
 
 # Initialize the tokenizer and model
 tokenizer = transformers.AutoTokenizer.from_pretrained(model_id)
-model = transformers.AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=torch.bfloat16, device_map="auto")
+model = transformers.AutoModelForCausalLM.from_pretrained(
+    model_id, 
+    torch_dtype=torch.float16,
+    # load_in_8bit=True,
+    device_map="auto"
+)
 
 # Define the custom stopping criterion
 class StopOnSequence(transformers.StoppingCriteria):
@@ -50,7 +98,6 @@ class StopOnSequence(transformers.StoppingCriteria):
         return False
 
 def get_query(text):
-    import re
     pattern = re.compile(r"<search>(.*?)</search>", re.DOTALL)
     matches = pattern.findall(text)
     if matches:
@@ -61,7 +108,7 @@ def get_query(text):
 def search(query: str):
     payload = {
             "queries": [query],
-            "topk": 3,
+            "topk": 5,
             "return_scores": True
         }
     results = requests.post("http://127.0.0.1:8000/retrieve", json=payload).json()['result']
@@ -88,41 +135,69 @@ cnt = 0
 if tokenizer.chat_template:
     prompt = tokenizer.apply_chat_template([{"role": "user", "content": prompt}], add_generation_prompt=True, tokenize=False)
 
-print('\n\n################# [Start Reasoning + Searching] ##################\n\n')
-print(prompt)
-# Encode the chat-formatted prompt and move it to the correct device
-while True:
-    input_ids = tokenizer.encode(prompt, return_tensors='pt').to(device)
-    attention_mask = torch.ones_like(input_ids)
-    
-    # Generate text with the stopping criteria
-    outputs = model.generate(
-        input_ids,
-        attention_mask=attention_mask,
-        max_new_tokens=1024,
-        stopping_criteria=stopping_criteria,
-        pad_token_id=tokenizer.eos_token_id,
-        do_sample=True,
-        temperature=0.7
-    )
+# 打开日志文件进行写入
+with open(log_file, 'w', encoding='utf-8') as log_f:
+    # 写入会话开始信息
+    header = f"""=== Search-R1 Inference Session ===
+Timestamp: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+Model ID: {model_id}
+Question: {question}
+Log File: {log_file}
+=====================================
 
-    if outputs[0][-1].item() in curr_eos:
+"""
+    log_f.write(header)
+    
+    print_and_log('\n\n################# [Start Reasoning + Searching] ##################\n\n', log_f)
+    print_and_log(prompt, log_f)
+    
+    # Encode the chat-formatted prompt and move it to the correct device
+    while True:
+        input_ids = tokenizer.encode(prompt, return_tensors='pt').to(device)
+        attention_mask = torch.ones_like(input_ids)
+        
+        # Generate text with the stopping criteria
+        outputs = model.generate(
+            input_ids,
+            attention_mask=attention_mask,
+            max_new_tokens=4096,
+            stopping_criteria=stopping_criteria,
+            pad_token_id=tokenizer.eos_token_id,
+            do_sample=True,
+            temperature=0.7
+        )
+
+        if outputs[0][-1].item() in curr_eos:
+            generated_tokens = outputs[0][input_ids.shape[1]:]
+            output_text = tokenizer.decode(generated_tokens, skip_special_tokens=True)
+            print_and_log(output_text, log_f)
+            
+            # 写入会话结束信息
+            footer = f"""
+
+=== Session Completed ===
+Total search iterations: {cnt}
+End time: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+========================
+"""
+            log_f.write(footer)
+            break
+
         generated_tokens = outputs[0][input_ids.shape[1]:]
         output_text = tokenizer.decode(generated_tokens, skip_special_tokens=True)
-        print(output_text)
-        break
+        
+        tmp_query = get_query(tokenizer.decode(outputs[0], skip_special_tokens=True))
+        if tmp_query:
+            # 记录搜索查询
+            search_info = f'[Search #{cnt+1}] Query: "{tmp_query}"'
+            print_and_log(f'\n{search_info}', log_f)
+            search_results = search(tmp_query)
+        else:
+            search_results = ''
 
-    generated_tokens = outputs[0][input_ids.shape[1]:]
-    output_text = tokenizer.decode(generated_tokens, skip_special_tokens=True)
-    
-    tmp_query = get_query(tokenizer.decode(outputs[0], skip_special_tokens=True))
-    if tmp_query:
-        # print(f'searching "{tmp_query}"...')
-        search_results = search(tmp_query)
-    else:
-        search_results = ''
+        search_text = curr_search_template.format(output_text=output_text, search_results=search_results)
+        prompt += search_text
+        cnt += 1
+        print_and_log(search_text, log_f)
 
-    search_text = curr_search_template.format(output_text=output_text, search_results=search_results)
-    prompt += search_text
-    cnt += 1
-    print(search_text)
+print(f"\ninference process saved to: {log_file}")

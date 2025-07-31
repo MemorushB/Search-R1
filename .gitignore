@@ -118,5 +118,12 @@ tests/e2e/toy_examples/deepspeed/synchronous/output.txt
 
 # log*
 log/
+inference_logs/
+test_results/
+
+# Environment variables and API keys
+.env
+.env.local
+.env.*.local
 
 **logs
