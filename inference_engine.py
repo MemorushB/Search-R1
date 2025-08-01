@@ -111,19 +111,16 @@ class SearchR1Model:
         <answer> … </answer>
 
         Guidelines for <answer>:
-        1. Clearly identify which guiding case law (Strasbourg jurisprudence) applies to each aspect of the question.
-        2. Format: Provide either 3-7 concise bullet points or 3-6 clear, succinct sentences.
+        1. Structure your response as a clear, well-reasoned paragraph.
+        2. Clearly identify which guiding case law (Strasbourg jurisprudence) applies to each aspect of the question.
         3. Address every relevant legal sub-issue, including but not limited to: scope/interference, positive obligations, legality, legitimate aim, necessity, proportionality, safeguards, and balancing.
         4. Paraphrase the question—do not directly reuse wording from the prompt.
-        5. Cite 1-2 illustrative Strasbourg cases succinctly in-line to support your points.
+        5. Cite 1-2 illustrative Strasbourg cases succinctly in-line to support your points, including the year and relevant paragraph numbers (e.g., *Murray v. the United Kingdom*, 1994, § 91).
 
         Example Response:
 
         <answer>
-        • Clearly paraphrased criterion A ...
-        • Clearly paraphrased criterion B ...
-        • Clearly paraphrased criterion C ...
-        • Illustrative cases: *Example v State* § 00, *Example 2 v State* § 00.
+        To determine if a surveillance measure falls under Article 8 of the ECHR, an applicant must first show the complaint relates to private/family life, home, or correspondence. Once established, the Court assesses if the measure interfered with this right or aligns with the State's positive obligations. Any interference must pursue a legitimate aim, be "in accordance with the law," and "necessary in a democratic society." To assess necessity, the Court balances competing interests. For instance, in terrorism cases, authorities must prove a fair balance was struck between individual rights under Article 8 § 1 and the State's need for effective prevention of terrorist crimes (*Murray v. the United Kingdom*, 1994, § 91).
         </answer>
 
         Question: {question}
