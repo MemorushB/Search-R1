@@ -17,9 +17,11 @@ tensorflow/my_graph/*
 .idea/
 # C extensions
 *.so
-data
 sft/output/*
 sft/data/*
+
+# Data files
+data/
 
 # Distribution / packaging
 .Python

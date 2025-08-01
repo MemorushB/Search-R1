@@ -15,7 +15,7 @@ This document contains the model preloading optimization details and comprehensi
 - **Global Model Management**: `get_or_create_model()` function provides singleton model management
 - **Backward Compatibility**: Original `search_r1_inference()` function remains usable, internally using the new preloading mechanism
 
-#### 2. test_echr_qa.py Enhancement
+#### 2. test_echr_guide.py Enhancement
 - **Added Preloading Options**: ECHRTestEvaluator constructor supports model preloading parameters
   - `preload_model`: Whether to enable model preloading
   - `model_id`: Specify model ID
@@ -65,7 +65,7 @@ This document contains the model preloading optimization details and comprehensi
 ### Core Test Files
 - `test_basic.py` - Basic functionality testing
 - `test_retriever_info.py` - Retriever information checking
-- `test_echr_qa.py` - Complete ECHR QA evaluation framework (optimized with preloading support)
+- `test_echr_guide.py` - Complete ECHR QA evaluation framework (optimized with preloading support)
 - `run_evaluation.py` - Command-line evaluation tool (enhanced with preloading configuration support)
 - `test_basic_preload.py` - Basic preloading functionality testing
 - `test_preload.py` - Complete preloading functionality testing
@@ -132,7 +132,7 @@ for question in questions:
 
 #### Method B: Use enhanced evaluator
 ```python
-from test_echr_qa import ECHRTestEvaluator
+from test_echr_guide import ECHRTestEvaluator
 
 # Enable preloading
 evaluator = ECHRTestEvaluator(
@@ -187,7 +187,7 @@ python run_evaluation.py --samples 5 --topk 10 --model-14b --quantization-bits 4
 
 **Direct run**:
 ```bash
-python test_echr_qa.py
+python test_echr_guide.py
 ```
 
 ### 5. Advanced Usage
@@ -378,6 +378,6 @@ A: Use `--model-14b` or `--quantization-bits 4` to reduce memory usage
 A: Run `python test_basic_preload.py` for verification
 
 **Q: How to use the original method?**
-A: Use `--no-preload` parameter or directly run `python test_echr_qa.py`
+A: Use `--no-preload` parameter or directly run `python test_echr_guide.py`
 
 This optimization ensures that when running `run_evaluation.py`, the model only needs to be loaded once instead of reloading for each sample, significantly improving evaluation efficiency! 🎉

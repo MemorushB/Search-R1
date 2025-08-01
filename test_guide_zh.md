@@ -15,7 +15,7 @@
 - **全局模型管理**: `get_or_create_model()` 函数提供模型单例管理
 - **保持向后兼容**: 原有的 `search_r1_inference()` 函数仍可使用，内部使用新的预加载机制
 
-#### 2. test_echr_qa.py 增强
+#### 2. test_echr_guide.py 增强
 - **新增预加载选项**: ECHRTestEvaluator 构造函数支持模型预加载参数
   - `preload_model`: 是否启用模型预加载
   - `model_id`: 指定模型ID
@@ -65,7 +65,7 @@
 ### 核心测试文件
 - `test_basic.py` - 基础功能测试
 - `test_retriever_info.py` - Retriever信息检查
-- `test_echr_qa.py` - 完整ECHR QA评估框架（已优化支持预加载）
+- `test_echr_guide.py` - 完整ECHR QA评估框架（已优化支持预加载）
 - `run_evaluation.py` - 命令行评估工具（已增强，支持预加载配置）
 - `test_basic_preload.py` - 基础预加载功能测试
 - `test_preload.py` - 完整预加载功能测试
@@ -132,7 +132,7 @@ for question in questions:
 
 #### 方式B：使用增强的评估器
 ```python
-from test_echr_qa import ECHRTestEvaluator
+from test_echr_guide import ECHRTestEvaluator
 
 # 启用预加载
 evaluator = ECHRTestEvaluator(
@@ -187,7 +187,7 @@ python run_evaluation.py --samples 5 --topk 10 --model-14b --quantization-bits 4
 
 **直接运行**：
 ```bash
-python test_echr_qa.py
+python test_echr_guide.py
 ```
 
 ### 5. 高级用法
@@ -361,6 +361,6 @@ A: 使用`--model-14b`或`--quantization-bits 4`减少内存使用
 A: 运行`python test_basic_preload.py`进行验证
 
 **Q: 想使用原来的方式怎么办？**
-A: 使用`--no-preload`参数或直接运行`python test_echr_qa.py`
+A: 使用`--no-preload`参数或直接运行`python test_echr_guide.py`
 
 这个优化确保了在运行 `run_evaluation.py` 时，模型只需要加载一次，而不是每个样本都重新加载，大大提高了评估效率！🎉

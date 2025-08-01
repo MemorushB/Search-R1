@@ -9,7 +9,7 @@ import os
 import requests
 import json
 import subprocess
-from test_echr_qa import ECHRTestEvaluator
+from test_echr_guide import ECHRTestEvaluator
 
 def check_dependencies():
     """Check required Python dependencies"""
@@ -65,7 +65,7 @@ def check_required_files():
         "data/echr_qa/echr_qa_compact.json",
         "data/echr_guide.jsonl",
         "inference_engine.py",
-        "test_echr_qa.py"
+        "test_echr_guide.py"
     ]
     
     missing_files = [f for f in required_files if not os.path.exists(f)]
