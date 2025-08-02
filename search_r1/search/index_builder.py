@@ -15,6 +15,8 @@ import openai
 import tiktoken
 import time
 import requests
+from sentence_transformers import SentenceTransformer
+
 
 class OpenAIEmbedder:
     """Wrapper class for OpenAI Embedding API"""
@@ -176,6 +178,51 @@ class BGEEmbedder:
                 embeddings = torch.nn.functional.normalize(embeddings, dim=-1)
                 embeddings = embeddings.cpu().numpy()
                 all_embeddings.append(embeddings)
+        
+        return np.concatenate(all_embeddings, axis=0).astype(np.float32)
+
+class SBERTEmbedder:
+    """Sentence-BERT Embedding Model Wrapper"""
+    
+    def __init__(self, model_path: str, use_fp16: bool = False, max_length: int = 512):
+        
+        self.model_path = model_path
+        self.max_length = max_length
+        self.use_fp16 = use_fp16
+        
+        # Load SentenceTransformer model
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        self.model = SentenceTransformer(model_path, device=device)
+        
+        # Set max sequence length
+        if hasattr(self.model, 'max_seq_length'):
+            self.model.max_seq_length = max_length
+        
+        # Enable fp16 if specified
+        if use_fp16 and device == 'cuda':
+            self.model = self.model.half()
+    
+    def encode_batch(self, texts: List[str], batch_size: int = 32, is_query: bool = False) -> np.ndarray:
+        """Batch encode texts using SBERT model"""
+        all_embeddings = []
+        
+        # For indexing, we typically don't need query-specific prefixes
+        # Most SBERT models handle both queries and passages the same way
+        processed_texts = texts
+        
+        for i in tqdm(range(0, len(processed_texts), batch_size), desc="SBERT Embedding"):
+            batch_texts = processed_texts[i:i + batch_size]
+            
+            # Encode using SentenceTransformer
+            embeddings = self.model.encode(
+                batch_texts,
+                convert_to_numpy=True,
+                normalize_embeddings=True,  # Normalize embeddings for better retrieval
+                batch_size=min(batch_size, len(batch_texts)),
+                show_progress_bar=False
+            )
+            
+            all_embeddings.append(embeddings)
         
         return np.concatenate(all_embeddings, axis=0).astype(np.float32)
 
@@ -438,6 +485,25 @@ class Index_Builder:
         
         return all_embeddings
 
+    def encode_all_sbert(self):
+        """Encode all documents using SBERT model"""
+        embedder = SBERTEmbedder(
+            model_path=self.model_path,
+            use_fp16=self.use_fp16,
+            max_length=self.max_length
+        )
+        
+        # Extract document contents
+        all_texts = []
+        for item in tqdm(self.corpus, desc="Preparing texts"):
+            text = item['contents']
+            all_texts.append(text)
+        
+        # Batch encode using SBERT
+        all_embeddings = embedder.encode_batch(all_texts, batch_size=self.batch_size, is_query=False)
+        
+        return all_embeddings
+
     @torch.no_grad()
     def build_dense_index(self):
         """Build dense index, supporting OpenAI embedding and BGE"""
@@ -467,6 +533,29 @@ class Index_Builder:
                 all_embeddings = self._load_embedding(self.embedding_path, corpus_size, hidden_size)
             else:
                 all_embeddings = self.encode_all_bge()
+                if self.save_embedding:
+                    self._save_embedding(all_embeddings)
+                del self.corpus
+                
+        elif self.retrieval_method == "sbert" or "sbert" in self.retrieval_method or "sentence" in self.retrieval_method:
+            # SBERT embedding logic
+            if self.embedding_path is not None:
+                # For SBERT models, determine hidden size from the saved embeddings
+                # Most SBERT models use 384, 512, 768, or 1024 dimensions
+                # We'll try to infer from the embedding file or use a default
+                try:
+                    # Try to load a small sample to determine dimensions
+                    temp_embeddings = np.memmap(self.embedding_path, mode="r", dtype=np.float32)
+                    corpus_size = len(self.corpus)
+                    hidden_size = len(temp_embeddings) // corpus_size
+                    all_embeddings = self._load_embedding(self.embedding_path, corpus_size, hidden_size)
+                except:
+                    # Fall back to re-encoding if loading fails
+                    all_embeddings = self.encode_all_sbert()
+                    if self.save_embedding:
+                        self._save_embedding(all_embeddings)
+            else:
+                all_embeddings = self.encode_all_sbert()
                 if self.save_embedding:
                     self._save_embedding(all_embeddings)
                 del self.corpus
@@ -512,7 +601,9 @@ MODEL2POOLING = {
     "e5": "mean",
     "bge": "cls",
     "contriever": "mean",
-    'jina': 'mean'
+    'jina': 'mean',
+    "sbert": "mean",
+    "sentence": "mean"
 }
 
 

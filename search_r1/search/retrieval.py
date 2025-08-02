@@ -11,6 +11,7 @@ import numpy as np
 from transformers import AutoConfig, AutoTokenizer, AutoModel
 import argparse
 import datasets
+from sentence_transformers import SentenceTransformer
 
 
 def load_corpus(corpus_path: str):
@@ -127,6 +128,52 @@ class Encoder:
         query_emb = query_emb.detach().cpu().numpy()
         query_emb = query_emb.astype(np.float32, order="C")
         return query_emb
+
+
+class SBERTEncoder:
+    """Sentence-BERT Encoder for retrieval.py"""
+    
+    def __init__(self, model_name, model_path, pooling_method, max_length, use_fp16):
+        
+        self.model_name = model_name
+        self.model_path = model_path
+        self.pooling_method = pooling_method  # Not used in SBERT but kept for compatibility
+        self.max_length = max_length
+        self.use_fp16 = use_fp16
+        
+        # Load SentenceTransformer model
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        self.model = SentenceTransformer(model_path, device=device)
+        
+        # Set max sequence length
+        if hasattr(self.model, 'max_seq_length'):
+            self.model.max_seq_length = max_length
+        
+        # Enable fp16 if specified
+        if use_fp16 and device == 'cuda':
+            self.model = self.model.half()
+
+    @torch.no_grad()
+    def encode(self, query_list: List[str], is_query=True) -> np.ndarray:
+        if isinstance(query_list, str):
+            query_list = [query_list]
+
+        # Most SBERT models don't require special query/passage prefixes
+        # Some models might benefit from this, can be customized based on specific model
+        
+        # Encode using SentenceTransformer
+        embeddings = self.model.encode(
+            query_list,
+            convert_to_numpy=True,
+            normalize_embeddings=True,  # Normalize embeddings for better retrieval
+            batch_size=32,
+            show_progress_bar=False
+        )
+        
+        # Ensure float32 format
+        embeddings = embeddings.astype(np.float32, order="C")
+        
+        return embeddings
 
 
 class BaseRetriever:
@@ -247,12 +294,25 @@ class DenseRetriever(BaseRetriever):
             # self.index = faiss.index_cpu_to_all_gpus(self.index)
 
         self.corpus = load_corpus(self.corpus_path)
-        self.encoder = Encoder(
-             model_name = self.retrieval_method, 
-             model_path = config.retrieval_model_path,
-             pooling_method = config.retrieval_pooling_method,
-             max_length = config.retrieval_query_max_length,
-             use_fp16 = config.retrieval_use_fp16
+        
+        # Choose encoder based on retrieval method
+        if (self.retrieval_method == "sbert" or 
+            "sbert" in self.retrieval_method or 
+            "sentence" in self.retrieval_method):
+            self.encoder = SBERTEncoder(
+                model_name=self.retrieval_method,
+                model_path=config.retrieval_model_path,
+                pooling_method=config.retrieval_pooling_method,
+                max_length=config.retrieval_query_max_length,
+                use_fp16=config.retrieval_use_fp16
+            )
+        else:
+            self.encoder = Encoder(
+                model_name = self.retrieval_method, 
+                model_path = config.retrieval_model_path,
+                pooling_method = config.retrieval_pooling_method,
+                max_length = config.retrieval_query_max_length,
+                use_fp16 = config.retrieval_use_fp16
             )
         self.topk = config.retrieval_topk
         self.batch_size = self.config.retrieval_batch_size

@@ -17,6 +17,14 @@ import uvicorn
 from fastapi import FastAPI
 from pydantic import BaseModel
 
+# Import sentence-transformers for SBERT support
+try:
+    from sentence_transformers import SentenceTransformer
+    SBERT_AVAILABLE = True
+except ImportError:
+    SBERT_AVAILABLE = False
+    print("Warning: sentence-transformers not installed. SBERT models will not be available.")
+
 def load_corpus(corpus_path: str):
     corpus = datasets.load_dataset(
         'json', 
@@ -307,6 +315,55 @@ class BGEEncoder:
 
         return query_emb
 
+class SBERTEncoder:
+    """Sentence-BERT Embedding Encoder"""
+    
+    def __init__(self, model_name, model_path, max_length, use_fp16):
+        if not SBERT_AVAILABLE:
+            raise ImportError("sentence-transformers is not installed. Please install it with: pip install sentence-transformers")
+        
+        self.model_name = model_name
+        self.model_path = model_path
+        self.max_length = max_length
+        self.use_fp16 = use_fp16
+        
+        # Load SentenceTransformer model
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        self.model = SentenceTransformer(model_path, device=device)
+        
+        # Set max sequence length
+        if hasattr(self.model, 'max_seq_length'):
+            self.model.max_seq_length = max_length
+        
+        # Enable fp16 if specified
+        if use_fp16 and device == 'cuda':
+            self.model = self.model.half()
+
+    @torch.no_grad()
+    def encode(self, query_list: List[str], is_query=True) -> np.ndarray:
+        if isinstance(query_list, str):
+            query_list = [query_list]
+
+        # Some SBERT models might benefit from query/passage prefixes
+        # This can be customized based on specific SBERT model requirements
+        if "msmarco" in self.model_name.lower() and is_query:
+            # For MS MARCO models, you might want to add query prefix
+            pass  # No special handling needed for most SBERT models
+        
+        # Encode using SentenceTransformer
+        embeddings = self.model.encode(
+            query_list,
+            convert_to_numpy=True,
+            normalize_embeddings=True,  # Normalize embeddings for better retrieval
+            batch_size=32,  # Process in batches for efficiency
+            show_progress_bar=False
+        )
+        
+        # Ensure float32 format
+        embeddings = embeddings.astype(np.float32, order="C")
+        
+        return embeddings
+
 class BGEReranker:
     """BGE Reranker for improving retrieval results"""
     
@@ -411,6 +468,13 @@ class DenseRetriever(BaseRetriever):
                 max_length=config.retrieval_query_max_length,
                 use_fp16=config.retrieval_use_fp16
             )
+        elif self.retrieval_method == "sbert" or "sbert" in self.retrieval_method or "sentence" in self.retrieval_method:
+            self.encoder = SBERTEncoder(
+                model_name=self.retrieval_method,
+                model_path=config.retrieval_model_path,
+                max_length=config.retrieval_query_max_length,
+                use_fp16=config.retrieval_use_fp16
+            )
         else:
             self.encoder = Encoder(
                 model_name=self.retrieval_method,
@@ -508,7 +572,7 @@ def get_retriever(config):
     """Factory function to create appropriate retriever based on config"""
     if config.retrieval_method.lower() == "bm25":
         return BM25Retriever(config)
-    elif config.retrieval_method.lower() in ["openai", "bge", "e5"] or any(name in config.retrieval_method.lower() for name in ["openai", "bge", "e5"]):
+    elif config.retrieval_method.lower() in ["openai", "bge", "e5", "sbert", "sentence"] or any(name in config.retrieval_method.lower() for name in ["openai", "bge", "e5", "sbert", "sentence"]):
         return DenseRetriever(config)
     else:
         # Default to dense retriever for other methods

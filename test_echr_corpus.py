@@ -24,18 +24,14 @@ from typing import List, Dict, Tuple, Optional, Set
 from datetime import datetime
 from tqdm import tqdm
 import ast
+import argparse
 
 # Suppress warnings
 warnings.filterwarnings('ignore')
 
 # Settings
-# Configuration
-MODEL_ID = "PeterJinGo/SearchR1-nq_hotpotqa_train-qwen2.5-14b-em-ppo-v0.3"  # Smaller model for testing
-# model_id = "PeterJinGo/SearchR1-nq_hotpotqa_train-qwen2.5-32b-em-grpo-v0.3"  # Larger model
-
-MAX_SAMPLES = 3  # Start with a small number for testing
-TOPK = 15
-EVALUATION_TOPK = 200  # Use a larger topk for evaluation to find target cases
+TOPK = 10
+EVALUATION_TOPK = 800  # Use a larger topk for evaluation to find target cases
 
 try:
     from sentence_transformers import SentenceTransformer, util
@@ -481,7 +477,7 @@ class ECHRCorpusTestEvaluator:
         intermediate_file = os.path.join(self.current_run_dir, "intermediate", f"step_{count:03d}.json")
         
         with open(intermediate_file, 'w', encoding='utf-8') as f:
-            json.dump(results, f, indent=2, ensure_ascii=False)
+            json.dump(results, f, indent=2, ensure_ascii=False, default=str)
         
         print(f"📄 Saved intermediate results to {intermediate_file}")
     
@@ -569,7 +565,7 @@ class ECHRCorpusTestEvaluator:
         # Prepare comprehensive results
         final_results = {
             'metadata': {
-                'timestamp': timestamp,
+                'timestamp': datetime.now().isoformat(),
                 'model_id': model_id,
                 'max_samples': max_samples,
                 'topk': topk,
@@ -587,7 +583,7 @@ class ECHRCorpusTestEvaluator:
         # Save JSON results
         results_file = os.path.join(self.current_run_dir, f"echr_corpus_results_{timestamp}.json")
         with open(results_file, 'w', encoding='utf-8') as f:
-            json.dump(final_results, f, indent=2, ensure_ascii=False)
+            json.dump(final_results, f, indent=2, ensure_ascii=False, default=str)
         
         # Create summary CSV
         summary_csv = ""
@@ -659,7 +655,7 @@ class ECHRCorpusTestEvaluator:
         latest_dir = os.path.join(self.results_dir, "latest")
         latest_results = os.path.join(latest_dir, "echr_corpus_results_latest.json")
         with open(latest_results, 'w', encoding='utf-8') as f:
-            json.dump(final_results, f, indent=2, ensure_ascii=False)
+            json.dump(final_results, f, indent=2, ensure_ascii=False, default=str)
         
         if summary_df is not None:
             latest_summary = os.path.join(latest_dir, "echr_corpus_summary_latest.csv")
@@ -690,19 +686,56 @@ class ECHRCorpusTestEvaluator:
         print(f"   - Latest: {latest_results}")
 
 
+import argparse
+
+
 def main():
     """Main function to run the corpus case retrieval evaluation"""
     
+    parser = argparse.ArgumentParser(description="Run ECHR Corpus Case Retrieval Evaluation")
+    parser.add_argument(
+        "--sample-mode",
+        type=str,
+        choices=["mini", "medium", "full"],
+        default="mini",
+        help="Sample mode: mini (3), medium (10), or full (all)."
+    )
+    parser.add_argument(
+        "--model-size",
+        type=str,
+        choices=["3b", "14b", "32b"],
+        default="32b",
+        help="Model size to use: 3b, 14b, or 32b."
+    )
+    args = parser.parse_args()
+
+    # Model ID configuration based on size
+    model_map = {
+        "3b": "PeterJinGo/SearchR1-nq_hotpotqa_train-qwen2.5-3b-em-ppo-v0.3",
+        "14b": "PeterJinGo/SearchR1-nq_hotpotqa_train-qwen2.5-14b-em-ppo-v0.3",
+        "32b": "PeterJinGo/SearchR1-nq_hotpotqa_train-qwen2.5-32b-em-grpo-v0.3"
+    }
+    model_id = model_map[args.model_size]
+    
     # Initialize evaluator
     evaluator = ECHRCorpusTestEvaluator(
+        model_id=model_id,
         corpus_path="data/echr_corpus_sliding_window/echr_corpus_split_512_0.0.jsonl",
         evaluation_topk=EVALUATION_TOPK  # Look at top 200 results to find target cases
     )
     
+    # Sample number configuration
+    if args.sample_mode == "mini":
+        max_samples = 3
+    elif args.sample_mode == "medium":
+        max_samples = 100
+    else: # full
+        max_samples = len(evaluator.qa_data)
+
     # Run evaluation
     results = evaluator.run_evaluation(
-        model_id=MODEL_ID,
-        max_samples=MAX_SAMPLES,
+        model_id=model_id,
+        max_samples=max_samples,
         topk=TOPK
     )
     

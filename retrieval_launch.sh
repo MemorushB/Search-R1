@@ -1,14 +1,14 @@
 #!/bin/bash
 
-# Model selection: Choose 1 for bm25, 2 for e5, 3 for openai, 4 for bge with reranker
+# Model selection: Choose 1 for bm25, 2 for e5, 3 for openai, 4 for bge with reranker, 5 for sbert
 model_choice=${1:-1}  # Default to 1 (bm25) if no argument provided
 
 file_path=data
 corpus_file=$file_path/echr_corpus_sliding_window/echr_corpus_split_512_0.0.jsonl
 
 # Set default values
-retriever_name="bm25"
-retriever_path="Qdrant/bm25"
+retriever_name="sbert"
+retriever_path="sentence-transformers/all-MiniLM-L6-v2"
 reranker_path=""
 use_reranker=false
 
@@ -40,12 +40,19 @@ case $model_choice in
         use_reranker=true
         index_file="$file_path/echr_corpus_sliding_window/512_0.0/bge/bge_Flat.index"
         ;;
+    5)  # SBERT
+        echo "Using Sentence-BERT model"
+        retriever_name="sbert"
+        retriever_path="sentence-transformers/all-MiniLM-L6-v2"
+        index_file="$file_path/echr_corpus_sliding_window/512_0.0/sbert/sbert_Flat.index"
+        ;;
     *)
-        echo "Invalid model choice. Please select 1, 2, 3, or 4."
+        echo "Invalid model choice. Please select 1, 2, 3, 4, or 5."
         echo "1: BM25"
         echo "2: E5"
         echo "3: OpenAI"
         echo "4: BGE with BGE reranker"
+        echo "5: Sentence-BERT"
         exit 1
         ;;
 esac
