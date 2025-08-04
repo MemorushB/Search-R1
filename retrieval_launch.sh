@@ -3,8 +3,8 @@
 # Model selection: Choose 1 for bm25, 2 for e5, 3 for openai, 4 for bge with reranker, 5 for sbert
 model_choice=${1:-1}  # Default to 1 (bm25) if no argument provided
 
-file_path=data
-corpus_file=$file_path/echr_corpus_sliding_window/echr_corpus_split_512_0.0.jsonl
+index_path=data/echr_corpus_sliding_window/1024_0.2
+corpus_file=data/echr_corpus_sliding_window/echr_corpus_split_1024_0.2.jsonl
 
 # Set default values
 retriever_name="sbert"
@@ -18,19 +18,19 @@ case $model_choice in
         echo "Using BM25 model"
         retriever_name="bm25"
         retriever_path="Qdrant/bm25"
-        index_file="$file_path/echr_corpus_sliding_window/512_0.0/bm25/bm25"
+        index_file="$index_path/bm25/bm25"
         ;;
     2)  # E5
         echo "Using E5 model"
         retriever_name="e5"
         retriever_path="intfloat/e5-large-v2"
-        index_file="$file_path/echr_corpus_sliding_window/512_0.0/e5/e5_Flat.index"
+        index_file="$index_path/e5/e5_Flat.index"
         ;;
     3)  # OpenAI
         echo "Using OpenAI model"
         retriever_name="openai"
         retriever_path="text-embedding-3-small"
-        index_file="$file_path/echr_corpus_sliding_window/512_0.0/openai/openai_Flat.index"
+        index_file="$index_path/openai/openai_Flat.index"
         ;;
     4)  # BGE with reranker
         echo "Using BGE model with BGE reranker"
@@ -38,13 +38,13 @@ case $model_choice in
         retriever_path="BAAI/bge-large-en-v1.5"
         reranker_path="BAAI/bge-reranker-v2-m3"
         use_reranker=true
-        index_file="$file_path/echr_corpus_sliding_window/512_0.0/bge/bge_Flat.index"
+        index_file="$index_path/bge/bge_Flat.index"
         ;;
     5)  # SBERT
         echo "Using Sentence-BERT model"
         retriever_name="sbert"
         retriever_path="sentence-transformers/all-MiniLM-L6-v2"
-        index_file="$file_path/echr_corpus_sliding_window/512_0.0/sbert/sbert_Flat.index"
+        index_file="$index_path/sbert/sbert_Flat.index"
         ;;
     *)
         echo "Invalid model choice. Please select 1, 2, 3, 4, or 5."
