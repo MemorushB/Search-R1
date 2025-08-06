@@ -1,10 +1,10 @@
 #!/bin/bash
 
-# Model selection: Choose 1 for bm25, 2 for e5, 3 for openai, 4 for bge with reranker, 5 for sbert
+# Model selection: Choose 1 for bm25, 2 for e5, 3 for openai, 4 for bge with reranker, 5 for sbert, 6 for qwen
 model_choice=${1:-1}  # Default to 1 (bm25) if no argument provided
 
-index_path=data/echr_corpus_sliding_window/1024_0.2
-corpus_file=data/echr_corpus_sliding_window/echr_corpus_split_1024_0.2.jsonl
+index_path=data/echr_corpus_sliding_window/512_0.1
+corpus_file=data/echr_corpus_sliding_window/echr_corpus_split_512_0.1.jsonl
 
 # Set default values
 retriever_name="sbert"
@@ -46,13 +46,20 @@ case $model_choice in
         retriever_path="sentence-transformers/all-MiniLM-L6-v2"
         index_file="$index_path/sbert/sbert_Flat.index"
         ;;
+    6)  # Qwen
+        echo "Using Qwen model"
+        retriever_name="qwen"
+        retriever_path="Qwen/Qwen3-Embedding-0.6B"
+        index_file="$index_path/qwen/qwen_Flat.index"
+        ;;
     *)
-        echo "Invalid model choice. Please select 1, 2, 3, 4, or 5."
+        echo "Invalid model choice. Please select 1, 2, 3, 4, 5, or 6."
         echo "1: BM25"
         echo "2: E5"
         echo "3: OpenAI"
         echo "4: BGE with BGE reranker"
         echo "5: Sentence-BERT"
+        echo "6: Qwen"
         exit 1
         ;;
 esac
@@ -75,7 +82,7 @@ fi
 openai_api_key="$OPENAI_API_KEY"
 echo "✅ Using OpenAI API key (${openai_api_key:0:10}...)"
 
-RETRIEVAL_TOPK=${RETRIEVAL_TOPK:-250}  
+RETRIEVAL_TOPK=${RETRIEVAL_TOPK:-800}  
 
 # Build command based on selected model
 cmd="python search_r1/search/retrieval_server.py --index_path $index_file \

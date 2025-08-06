@@ -226,11 +226,62 @@ class SBERTEmbedder:
         
         return np.concatenate(all_embeddings, axis=0).astype(np.float32)
 
+class QwenEmbedder:
+    """Qwen Embedding Model Wrapper"""
+    
+    def __init__(self, model_path: str, use_fp16: bool = False, max_length: int = 512):
+        self.model_path = model_path
+        self.max_length = max_length
+        self.use_fp16 = use_fp16
+        
+        # Load Qwen model and tokenizer
+        self.model = AutoModel.from_pretrained(model_path, trust_remote_code=True)
+        self.tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
+        
+        self.model.eval()
+        self.model.cuda()
+        if use_fp16:
+            self.model = self.model.half()
+    
+    def encode_batch(self, texts: List[str], batch_size: int = 32, is_query: bool = False) -> np.ndarray:
+        """Batch encode texts using Qwen model"""
+        all_embeddings = []
+        
+        # Add Qwen prefix for passages
+        if not is_query:
+            processed_texts = [f"passage: {doc}" for doc in texts]
+        else:
+            # For queries, prefix is handled in retrieval server
+            processed_texts = texts
+        
+        for i in tqdm(range(0, len(processed_texts), batch_size), desc="Qwen Embedding"):
+            batch_texts = processed_texts[i:i + batch_size]
+            
+            # Tokenize
+            inputs = self.tokenizer(
+                batch_texts,
+                padding=True,
+                truncation=True,
+                return_tensors='pt',
+                max_length=self.max_length
+            ).to('cuda')
+            
+            with torch.no_grad():
+                outputs = self.model(**inputs)
+                # Last-token pooling: use the representation of the last valid token (official method)
+                embeddings = last_token_pool(outputs.last_hidden_state, inputs['attention_mask'])
+                # Normalize embeddings
+                embeddings = torch.nn.functional.normalize(embeddings, dim=-1)
+                embeddings = embeddings.cpu().numpy()
+                all_embeddings.append(embeddings)
+        
+        return np.concatenate(all_embeddings, axis=0).astype(np.float32)
+
+
 def load_model(
         model_path: str, 
         use_fp16: bool = False
     ):
-    model_config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
     model = AutoModel.from_pretrained(model_path, trust_remote_code=True)
     model.eval()
     model.cuda()
@@ -240,6 +291,24 @@ def load_model(
 
     return model, tokenizer
 
+# ---------------------------------------------------
+# Helper: official last‑token pooling for models like Qwen
+def last_token_pool(last_hidden_states: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
+    """Return the embedding of the last valid token for each sequence.
+    Handles both left‑padded and right‑padded sequences.
+    """
+    # Detect left‑padding (all entries in the last column are 1)
+    left_padding = (attention_mask[:, -1].sum() == attention_mask.shape[0])
+    if left_padding:
+        # All sequences are left‑padded, the last token is at position -1
+        return last_hidden_states[:, -1]
+    else:
+        # Right‑padded: compute actual length for each batch entry
+        sequence_lengths = attention_mask.sum(dim=1) - 1
+        batch_size = last_hidden_states.shape[0]
+        return last_hidden_states[torch.arange(batch_size, device=last_hidden_states.device), sequence_lengths]
+
+
 
 def pooling(
         pooler_output,
@@ -248,12 +317,17 @@ def pooling(
         pooling_method = "mean"
     ):
     if pooling_method == "mean":
+        # Mean pooling over visible tokens
         last_hidden = last_hidden_state.masked_fill(~attention_mask[..., None].bool(), 0.0)
         return last_hidden.sum(dim=1) / attention_mask.sum(dim=1)[..., None]
     elif pooling_method == "cls":
+        # CLS token (first token)
         return last_hidden_state[:, 0]
     elif pooling_method == "pooler":
         return pooler_output
+    elif pooling_method == "last":
+        # Last valid token (official method)
+        return last_token_pool(last_hidden_state, attention_mask)
     else:
         raise NotImplementedError("Pooling method not implemented!")
 
@@ -398,7 +472,7 @@ class Index_Builder:
 
         all_embeddings = []
 
-        for start_idx in tqdm(range(0, len(self.corpus), self.batch_size), desc='Inference Embeddings:'):
+        for start_idx in tqdm(range(0, len(list(self.corpus)), self.batch_size), desc='Inference Embeddings:'):
             # batch_data = ['"' + title + '"\n' + text for title, text in zip(batch_data_title, batch_data_text)]
             batch_data = self.corpus[start_idx:start_idx+self.batch_size]['contents']
 
@@ -485,6 +559,25 @@ class Index_Builder:
         
         return all_embeddings
 
+    def encode_all_qwen(self):
+        """Encode all documents using Qwen model"""
+        embedder = QwenEmbedder(
+            model_path=self.model_path,
+            use_fp16=self.use_fp16,
+            max_length=self.max_length
+        )
+        
+        # Extract document contents
+        all_texts = []
+        for item in tqdm(self.corpus, desc="Preparing texts"):
+            text = item['contents']
+            all_texts.append(text)
+        
+        # Batch encode using Qwen
+        all_embeddings = embedder.encode_batch(all_texts, batch_size=self.batch_size, is_query=False)
+        
+        return all_embeddings
+
     def encode_all_sbert(self):
         """Encode all documents using SBERT model"""
         embedder = SBERTEmbedder(
@@ -514,7 +607,7 @@ class Index_Builder:
         if self.retrieval_method == "openai" or "openai" in self.retrieval_method:
             # OpenAI embedding logic (existing code)
             if self.embedding_path is not None:
-                corpus_size = len(self.corpus)
+                corpus_size = len(list(self.corpus))
                 hidden_size = 1536  
                 all_embeddings = self._load_embedding(self.embedding_path, corpus_size, hidden_size)
             else:
@@ -529,7 +622,7 @@ class Index_Builder:
                 # For BGE models, get hidden size from config
                 config = AutoConfig.from_pretrained(self.model_path)
                 hidden_size = config.hidden_size
-                corpus_size = len(self.corpus)
+                corpus_size = len(list(self.corpus))
                 all_embeddings = self._load_embedding(self.embedding_path, corpus_size, hidden_size)
             else:
                 all_embeddings = self.encode_all_bge()
@@ -546,7 +639,7 @@ class Index_Builder:
                 try:
                     # Try to load a small sample to determine dimensions
                     temp_embeddings = np.memmap(self.embedding_path, mode="r", dtype=np.float32)
-                    corpus_size = len(self.corpus)
+                    corpus_size = len(list(self.corpus))
                     hidden_size = len(temp_embeddings) // corpus_size
                     all_embeddings = self._load_embedding(self.embedding_path, corpus_size, hidden_size)
                 except:
@@ -560,13 +653,27 @@ class Index_Builder:
                     self._save_embedding(all_embeddings)
                 del self.corpus
                 
+        elif self.retrieval_method == "qwen" or "qwen" in self.retrieval_method:
+            # Qwen embedding logic
+            if self.embedding_path is not None:
+                # For Qwen models, get hidden size from config
+                config = AutoConfig.from_pretrained(self.model_path)
+                hidden_size = config.hidden_size
+                corpus_size = len(list(self.corpus))
+                all_embeddings = self._load_embedding(self.embedding_path, corpus_size, hidden_size)
+            else:
+                all_embeddings = self.encode_all_qwen()
+                if self.save_embedding:
+                    self._save_embedding(all_embeddings)
+                del self.corpus
+                
         else:
             # Use the original local model encoding logic
             self.encoder, self.tokenizer = load_model(model_path=self.model_path, 
                                                       use_fp16=self.use_fp16)
             if self.embedding_path is not None:
                 hidden_size = self.encoder.config.hidden_size
-                corpus_size = len(self.corpus)
+                corpus_size = len(list(self.corpus))
                 all_embeddings = self._load_embedding(self.embedding_path, corpus_size, hidden_size)
             else:
                 all_embeddings = self.encode_all()
@@ -603,7 +710,8 @@ MODEL2POOLING = {
     "contriever": "mean",
     'jina': 'mean',
     "sbert": "mean",
-    "sentence": "mean"
+    "sentence": "mean",
+    "qwen": "last"
 }
 
 
@@ -640,7 +748,8 @@ def main():
                 pooling_method = v
                 break
     else:
-        if args.pooling_method not in ['mean', 'cls', 'pooler']:
+        # Accept 'last' as a valid pooling method for Qwen models
+        if args.pooling_method not in ['mean', 'cls', 'pooler', 'last']:
             raise NotImplementedError
         else:
             pooling_method = args.pooling_method

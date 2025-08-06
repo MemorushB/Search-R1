@@ -24,6 +24,18 @@ try:
 except ImportError:
     SBERT_AVAILABLE = False
     print("Warning: sentence-transformers not installed. SBERT models will not be available.")
+    
+def last_token_pool(last_hidden_states: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
+    """Return the embedding of the last valid token for each sequence.
+    Handles both left‑padded and right‑padded sequences.
+    """
+    left_padding = (attention_mask[:, -1].sum() == attention_mask.shape[0])
+    if left_padding:
+        return last_hidden_states[:, -1]
+    else:
+        sequence_lengths = attention_mask.sum(dim=1) - 1
+        batch_size = last_hidden_states.shape[0]
+        return last_hidden_states[torch.arange(batch_size, device=last_hidden_states.device), sequence_lengths]
 
 def load_corpus(corpus_path: str):
     corpus = datasets.load_dataset(
@@ -41,7 +53,7 @@ def read_jsonl(file_path):
             data.append(json.loads(line))
     return data
 
-def load_docs(corpus, doc_idxs):
+def load_docs(corpus, doc_idxs) -> List[Dict]:
     results = [corpus[int(idx)] for idx in doc_idxs]
     return results
 
@@ -97,6 +109,12 @@ class Encoder:
         if "bge" in self.model_name.lower():
             if is_query:
                 query_list = [f"Represent this sentence for searching relevant passages: {query}" for query in query_list]
+        
+        if "qwen" in self.model_name.lower():
+            if is_query:
+                query_list = [f"query: {query}" for query in query_list]
+            else:
+                query_list = [f"passage: {query}" for query in query_list]
 
         inputs = self.tokenizer(query_list,
                                 max_length=self.max_length,
@@ -141,10 +159,10 @@ class BaseRetriever:
         self.index_path = config.index_path
         self.corpus_path = config.corpus_path
 
-    def _search(self, query: str, num: int, return_score: bool):
+    def _search(self, query: str, num: Optional[int], return_score: bool):
         raise NotImplementedError
 
-    def _batch_search(self, query_list: List[str], num: int, return_score: bool):
+    def _batch_search(self, query_list: List[str], num: Optional[int], return_score: bool):
         raise NotImplementedError
 
     def search(self, query: str, num: int = None, return_score: bool = False):
@@ -266,6 +284,7 @@ class OpenAIEncoder:
                     raise
                 time.sleep(1)
                 
+        raise Exception("Failed to encode after maximum retries")
 
 class BGEEncoder:
     """BGE Embedding Encoder"""
@@ -363,6 +382,56 @@ class SBERTEncoder:
         embeddings = embeddings.astype(np.float32, order="C")
         
         return embeddings
+
+class QwenEncoder:
+    """Qwen Embedding Encoder"""
+    
+    def __init__(self, model_name, model_path, max_length, use_fp16):
+        self.model_name = model_name
+        self.model_path = model_path
+        self.max_length = max_length
+        self.use_fp16 = use_fp16
+
+        self.model = AutoModel.from_pretrained(model_path, trust_remote_code=True)
+        self.tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
+        
+        self.model.eval()
+        self.model.cuda()
+        if use_fp16:
+            self.model = self.model.half()
+
+    @torch.no_grad()
+    def encode(self, query_list: List[str], is_query=True) -> np.ndarray:
+        if isinstance(query_list, str):
+            query_list = [query_list]
+
+        # Add Qwen instruction for queries
+        if is_query:
+            query_list = [f"query: {query}" for query in query_list]
+        else:
+            query_list = [f"passage: {query}" for query in query_list]
+
+        inputs = self.tokenizer(
+            query_list,
+            max_length=self.max_length,
+            padding=True,
+            truncation=True,
+            return_tensors="pt"
+        ).to('cuda')
+
+        output = self.model(**inputs, return_dict=True)
+        # Last-token pooling: use representation of last token
+        query_emb = last_token_pool(output.last_hidden_state, inputs['attention_mask'])
+        # Normalize embeddings
+        query_emb = torch.nn.functional.normalize(query_emb, dim=-1)
+
+        query_emb = query_emb.detach().cpu().numpy()
+        query_emb = query_emb.astype(np.float32, order="C")
+        
+        del inputs, output
+        torch.cuda.empty_cache()
+
+        return query_emb
 
 class BGEReranker:
     """BGE Reranker for improving retrieval results"""
@@ -475,6 +544,13 @@ class DenseRetriever(BaseRetriever):
                 max_length=config.retrieval_query_max_length,
                 use_fp16=config.retrieval_use_fp16
             )
+        elif self.retrieval_method == "qwen" or "qwen" in self.retrieval_method:
+            self.encoder = QwenEncoder(
+                model_name=self.retrieval_method,
+                model_path=config.retrieval_model_path,
+                max_length=config.retrieval_query_max_length,
+                use_fp16=config.retrieval_use_fp16
+            )
         else:
             self.encoder = Encoder(
                 model_name=self.retrieval_method,
@@ -503,7 +579,7 @@ class DenseRetriever(BaseRetriever):
         # Get initial retrieval results
         initial_num = num * 2 if self.reranker else num  # Retrieve more for reranking
         
-        query_emb = self.encoder.encode(query)
+        query_emb = self.encoder.encode([query])
         scores, idxs = self.index.search(query_emb, k=initial_num)
         idxs = idxs[0]
         scores = scores[0]
@@ -572,7 +648,7 @@ def get_retriever(config):
     """Factory function to create appropriate retriever based on config"""
     if config.retrieval_method.lower() == "bm25":
         return BM25Retriever(config)
-    elif config.retrieval_method.lower() in ["openai", "bge", "e5", "sbert", "sentence"] or any(name in config.retrieval_method.lower() for name in ["openai", "bge", "e5", "sbert", "sentence"]):
+    elif config.retrieval_method.lower() in ["openai", "bge", "e5", "sbert", "sentence", "qwen"] or any(name in config.retrieval_method.lower() for name in ["openai", "bge", "e5", "sbert", "sentence", "qwen"]):
         return DenseRetriever(config)
     else:
         # Default to dense retriever for other methods
@@ -597,9 +673,9 @@ class Config:
         retrieval_query_max_length: int = 256,
         retrieval_use_fp16: bool = False,
         retrieval_batch_size: int = 128,
-        openai_api_key: str = None,
-        openai_base_url: str = None,
-        reranker_model_path: str = None,  # Add reranker support
+        openai_api_key: Optional[str] = None,
+        openai_base_url: Optional[str] = None,
+        reranker_model_path: Optional[str] = None,  # Add reranker support
         reranker_max_length: int = 512
     ):
         self.retrieval_method = retrieval_method

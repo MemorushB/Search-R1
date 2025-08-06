@@ -10,7 +10,7 @@ The script evaluates:
 2. The ranking position of correct cases in retrieval results
 3. Overall retrieval performance metrics
 
-Database: data/echr_corpus_sliding_window/echr_corpus_split_512_0.0.jsonl
+Database: data/echr_corpus_sliding_window/echr_corpus_split_512_0.1.jsonl
 """
 
 import json
@@ -32,6 +32,7 @@ warnings.filterwarnings('ignore')
 # Settings
 TOPK = 10
 EVALUATION_TOPK = 800  # Use a larger topk for evaluation to find target cases
+CORPUS_PATH = "data/echr_corpus_sliding_window/echr_corpus_split_512_0.1.jsonl"
 
 try:
     from sentence_transformers import SentenceTransformer, util
@@ -698,7 +699,7 @@ def main():
         type=str,
         choices=["mini", "medium", "full"],
         default="mini",
-        help="Sample mode: mini (3), medium (10), or full (all)."
+        help="Sample mode: mini (3), medium (100), or full (all)."
     )
     parser.add_argument(
         "--model-size",
@@ -720,7 +721,7 @@ def main():
     # Initialize evaluator
     evaluator = ECHRCorpusTestEvaluator(
         model_id=model_id,
-        corpus_path="data/echr_corpus_sliding_window/echr_corpus_split_512_0.0.jsonl",
+        corpus_path=CORPUS_PATH,
         evaluation_topk=EVALUATION_TOPK  # Look at top 200 results to find target cases
     )
     

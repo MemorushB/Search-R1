@@ -56,8 +56,12 @@ def get_reranker(config):
 @app.post("/retrieve")
 def search_endpoint(request: SearchRequest):
     # Step 1: Retrieve documents
+    queries = request.queries
+    if retriever.retrieval_method == "qwen":
+        queries = [f"query: {q}" for q in queries]
+
     retrieved_docs = retriever.batch_search(
-        query_list=request.queries,
+        query_list=queries,
         num=request.topk_retrieval,
         return_score=False
     )
