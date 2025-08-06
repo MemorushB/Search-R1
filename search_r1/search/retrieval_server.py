@@ -7,7 +7,7 @@ import argparse
 import faiss
 import torch
 import numpy as np
-from transformers import AutoConfig, AutoTokenizer, AutoModel
+from transformers import AutoConfig, AutoTokenizer, AutoModel, AutoModelForCausalLM
 from tqdm import tqdm
 import datasets
 import openai  
@@ -511,6 +511,142 @@ class BGEReranker:
         return reranked_passages
 
 
+class QwenReranker:
+    """Qwen Reranker for improving retrieval results"""
+    
+    def __init__(self, model_path: str, use_fp16: bool = False, max_length: int = 8192):
+        self.model_path = model_path
+        self.max_length = max_length
+        self.use_fp16 = use_fp16
+        
+        # Load Qwen reranker model using AutoModelForCausalLM
+        self.model = AutoModelForCausalLM.from_pretrained(
+            model_path, 
+            trust_remote_code=True,
+            torch_dtype=torch.float16 if use_fp16 else torch.float32
+        )
+        self.tokenizer = AutoTokenizer.from_pretrained(
+            model_path, 
+            trust_remote_code=True,
+            padding_side='left'
+        )
+        
+        self.model.eval()
+        self.model.cuda()
+        
+        # Get token IDs for "yes" and "no"
+        self.token_false_id = self.tokenizer.convert_tokens_to_ids("no")
+        self.token_true_id = self.tokenizer.convert_tokens_to_ids("yes")
+        
+        # Define prefix and suffix for Qwen reranker format
+        self.prefix = "<|im_start|>system\nJudge whether the Document meets the requirements based on the Query and the Instruct provided. Note that the answer can only be \"yes\" or \"no\".<|im_end|>\n<|im_start|>user\n"
+        self.suffix = "<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n"
+        self.prefix_tokens = self.tokenizer.encode(self.prefix, add_special_tokens=False)
+        self.suffix_tokens = self.tokenizer.encode(self.suffix, add_special_tokens=False)
+    
+    def format_instruction(self, instruction: str, query: str, doc: str) -> str:
+        """Format input according to Qwen reranker specification"""
+        if instruction is None:
+            instruction = 'Given a web search query, retrieve relevant passages that answer the query'
+        return f"<Instruct>: {instruction}\n<Query>: {query}\n<Document>: {doc}"
+    
+    def process_inputs(self, pairs: List[str]) -> Dict:
+        """Process input pairs for Qwen reranker"""
+        inputs = self.tokenizer(
+            pairs, 
+            padding=False, 
+            truncation='longest_first',
+            return_attention_mask=False, 
+            max_length=self.max_length - len(self.prefix_tokens) - len(self.suffix_tokens)
+        )
+        
+        # Add prefix and suffix tokens
+        for i, ele in enumerate(inputs['input_ids']):
+            inputs['input_ids'][i] = self.prefix_tokens + ele + self.suffix_tokens
+        
+        # Pad inputs
+        inputs = self.tokenizer.pad(
+            inputs, 
+            padding=True, 
+            return_tensors="pt", 
+            max_length=self.max_length
+        )
+        
+        # Move to GPU
+        for key in inputs:
+            inputs[key] = inputs[key].to(self.model.device)
+        
+        return inputs
+    
+    @torch.no_grad()
+    def compute_logits(self, inputs: Dict) -> List[float]:
+        """Compute relevance scores using logits"""
+        batch_scores = self.model(**inputs).logits[:, -1, :]
+        true_vector = batch_scores[:, self.token_true_id]
+        false_vector = batch_scores[:, self.token_false_id]
+        batch_scores = torch.stack([false_vector, true_vector], dim=1)
+        batch_scores = torch.nn.functional.log_softmax(batch_scores, dim=1)
+        scores = batch_scores[:, 1].exp().tolist()
+        return scores
+
+    @torch.no_grad()
+    def rerank(self, query: str, passages: List[Dict], top_k: int = None, instruction: str = None) -> List[Dict]:
+        """
+        Rerank passages based on query-passage relevance using Qwen reranker
+        
+        Args:
+            query: Query string
+            passages: List of passage dictionaries with 'contents' field
+            top_k: Number of top passages to return after reranking
+            instruction: Custom instruction for the reranking task
+        
+        Returns:
+            Reranked list of passages
+        """
+        if not passages:
+            return passages
+            
+        if top_k is None:
+            top_k = len(passages)
+        
+        if instruction is None:
+            instruction = 'Given a web search query, retrieve relevant passages that answer the query'
+        
+        # Prepare formatted input pairs
+        formatted_pairs = []
+        for passage in passages:
+            content = passage.get('contents', '')
+            formatted_text = self.format_instruction(instruction, query, content)
+            formatted_pairs.append(formatted_text)
+        
+        # Batch process for efficiency
+        batch_size = 16  # Reduced batch size for stability
+        all_scores = []
+        
+        for i in range(0, len(formatted_pairs), batch_size):
+            batch_pairs = formatted_pairs[i:i + batch_size]
+            
+            # Process inputs
+            inputs = self.process_inputs(batch_pairs)
+            
+            # Compute relevance scores
+            scores = self.compute_logits(inputs)
+            all_scores.extend(scores)
+            
+            # Clean up memory
+            del inputs
+            torch.cuda.empty_cache()
+        
+        # Sort by scores (descending)
+        scored_passages = list(zip(passages, all_scores))
+        scored_passages.sort(key=lambda x: x[1], reverse=True)
+        
+        # Return top_k reranked passages
+        reranked_passages = [passage for passage, _ in scored_passages[:top_k]]
+        
+        return reranked_passages
+
+
 class DenseRetriever(BaseRetriever):
     def __init__(self, config):
         super().__init__(config)
@@ -563,11 +699,20 @@ class DenseRetriever(BaseRetriever):
         # Initialize reranker if specified
         self.reranker = None
         if hasattr(config, 'reranker_model_path') and config.reranker_model_path:
-            self.reranker = BGEReranker(
-                model_path=config.reranker_model_path,
-                use_fp16=config.retrieval_use_fp16,
-                max_length=getattr(config, 'reranker_max_length', 512)
-            )
+            # Choose reranker based on model path or retrieval method
+            if "qwen" in config.reranker_model_path.lower() or "qwen" in self.retrieval_method.lower():
+                self.reranker = QwenReranker(
+                    model_path=config.reranker_model_path,
+                    use_fp16=config.retrieval_use_fp16,
+                    max_length=getattr(config, 'reranker_max_length', 512)
+                )
+            else:
+                # Default to BGE reranker for other models
+                self.reranker = BGEReranker(
+                    model_path=config.reranker_model_path,
+                    use_fp16=config.retrieval_use_fp16,
+                    max_length=getattr(config, 'reranker_max_length', 512)
+                )
         
         self.topk = config.retrieval_topk
         self.batch_size = config.retrieval_batch_size
@@ -676,7 +821,7 @@ class Config:
         openai_api_key: Optional[str] = None,
         openai_base_url: Optional[str] = None,
         reranker_model_path: Optional[str] = None,  # Add reranker support
-        reranker_max_length: int = 512
+        reranker_max_length: int = 8192
     ):
         self.retrieval_method = retrieval_method
         self.retrieval_topk = retrieval_topk

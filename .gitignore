@@ -129,3 +129,10 @@ test_results/
 .env.*.local
 
 **logs
+
+# claude
+CLAUDE.md
+.claude
+
+# github
+.github

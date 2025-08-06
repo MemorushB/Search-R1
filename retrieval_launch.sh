@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Model selection: Choose 1 for bm25, 2 for e5, 3 for openai, 4 for bge with reranker, 5 for sbert, 6 for qwen
+# Model selection: Choose 1 for bm25, 2 for e5, 3 for openai, 4 for bge with reranker, 5 for sbert, 6 for qwen, 7 for qwen with reranker
 model_choice=${1:-1}  # Default to 1 (bm25) if no argument provided
 
 index_path=data/echr_corpus_sliding_window/512_0.1
@@ -35,7 +35,7 @@ case $model_choice in
     4)  # BGE with reranker
         echo "Using BGE model with BGE reranker"
         retriever_name="bge"
-        retriever_path="BAAI/bge-large-en-v1.5"
+        retriever_path="BAAI/bge-m3"
         reranker_path="BAAI/bge-reranker-v2-m3"
         use_reranker=true
         index_file="$index_path/bge/bge_Flat.index"
@@ -52,14 +52,23 @@ case $model_choice in
         retriever_path="Qwen/Qwen3-Embedding-0.6B"
         index_file="$index_path/qwen/qwen_Flat.index"
         ;;
+    7)  # Qwen with reranker
+        echo "Using Qwen model with Qwen reranker"
+        retriever_name="qwen"
+        retriever_path="Qwen/Qwen3-Embedding-0.6B"
+        reranker_path="Qwen/Qwen3-Reranker-0.6B"
+        use_reranker=true
+        index_file="$index_path/qwen/qwen_Flat.index"
+        ;;
     *)
-        echo "Invalid model choice. Please select 1, 2, 3, 4, 5, or 6."
+        echo "Invalid model choice. Please select 1, 2, 3, 4, 5, 6, or 7."
         echo "1: BM25"
         echo "2: E5"
         echo "3: OpenAI"
         echo "4: BGE with BGE reranker"
         echo "5: Sentence-BERT"
         echo "6: Qwen"
+        echo "7: Qwen with Qwen reranker"
         exit 1
         ;;
 esac
@@ -92,7 +101,7 @@ cmd="python search_r1/search/retrieval_server.py --index_path $index_file \
                                             --retriever_model $retriever_path \
                                             --openai_api_key $openai_api_key"
 
-# Add reranker option only if using BGE with reranker
+# Add reranker option only if using BGE with reranker or Qwen with reranker
 if [ "$use_reranker" = true ]; then
     cmd="$cmd --reranker_model $reranker_path"
 fi
@@ -101,6 +110,9 @@ fi
 cmd="$cmd --faiss_gpu"
 
 echo "Using $retriever_name retriever with topk=$RETRIEVAL_TOPK"
+if [ "$use_reranker" = true ]; then
+    echo "With reranker: $reranker_path"
+fi
 echo "Running command:"
 echo $cmd
 eval $cmd

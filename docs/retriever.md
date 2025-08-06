@@ -48,8 +48,24 @@ python search_r1/search/retrieval_server.py --index_path $index_file --corpus_pa
 
 ### Local Dense Retriever
 
-You can also adopt some off-the-shelf dense retrievers, e.g., e5. These models are much stronger than sparse retriever in some specific domains.
+You can also adopt some off-the-shelf dense retrievers, e.g., e5, BGE, Qwen, or SBERT. These models are much stronger than sparse retriever in some specific domains.
 If you have sufficient GPU, we would recommend the flat indexing variant below, otherwise you can adopt the ANN variant.
+
+#### Supported Models
+
+- **E5**: `intfloat/e5-base-v2`, `intfloat/e5-large-v2`
+- **BGE**: `BAAI/bge-m3` (with optional reranker support)
+- **Qwen**: `Qwen/Qwen3-Embedding-0.6B` (with optional reranker support)
+- **SBERT**: `sentence-transformers/all-MiniLM-L6-v2`
+- **OpenAI**: `text-embedding-3-small`
+
+#### Reranker Support
+
+We support reranking to improve retrieval quality:
+- **BGE Reranker**: `BAAI/bge-reranker-v2-m3`
+- **Qwen Reranker**: `Qwen/Qwen3-Reranker-0.6B`
+
+When using rerankers, the system first retrieves more candidates (typically 2x the target number) and then reranks them to return the top-k most relevant results.
 
 #### Flat indexing
 
@@ -74,6 +90,50 @@ retriever_name=e5
 retriever_path=intfloat/e5-base-v2
 
 python search_r1/search/retrieval_server.py --index_path $index_file --corpus_path $corpus_file --topk 3 --retriever_name $retriever_name --retriever_model $retriever_path --faiss_gpu
+
+```
+
+#### Qwen Dense Retriever
+
+```bash
+conda activate retriever
+
+index_file=$save_path/qwen_Flat.index
+corpus_file=$save_path/corpus.jsonl
+retriever_name=qwen
+retriever_path=Qwen/Qwen3-Embedding-0.6B
+
+python search_r1/search/retrieval_server.py --index_path $index_file --corpus_path $corpus_file --topk 3 --retriever_name $retriever_name --retriever_model $retriever_path --faiss_gpu
+
+```
+
+#### BGE with Reranker
+
+```bash
+conda activate retriever
+
+index_file=$save_path/bge_Flat.index
+corpus_file=$save_path/corpus.jsonl
+retriever_name=bge
+retriever_path=BAAI/bge-m3
+reranker_path=BAAI/bge-reranker-v2-m3
+
+python search_r1/search/retrieval_server.py --index_path $index_file --corpus_path $corpus_file --topk 3 --retriever_name $retriever_name --retriever_model $retriever_path --reranker_model $reranker_path --faiss_gpu
+
+```
+
+#### Qwen with Reranker
+
+```bash
+conda activate retriever
+
+index_file=$save_path/qwen_Flat.index
+corpus_file=$save_path/corpus.jsonl
+retriever_name=qwen
+retriever_path=Qwen/Qwen3-Embedding-0.6B
+reranker_path=Qwen/Qwen3-Reranker-0.6B
+
+python search_r1/search/retrieval_server.py --index_path $index_file --corpus_path $corpus_file --topk 3 --retriever_name $retriever_name --retriever_model $retriever_path --reranker_model $reranker_path --faiss_gpu
 
 ```
 
