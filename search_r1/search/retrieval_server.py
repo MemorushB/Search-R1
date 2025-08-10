@@ -159,17 +159,17 @@ class BaseRetriever:
         self.index_path = config.index_path
         self.corpus_path = config.corpus_path
 
-    def _search(self, query: str, num: Optional[int], return_score: bool):
+    def _search(self, query: str, num: Optional[int], return_score: bool, instruction: Optional[str] = None):
         raise NotImplementedError
 
-    def _batch_search(self, query_list: List[str], num: Optional[int], return_score: bool):
+    def _batch_search(self, query_list: List[str], num: Optional[int], return_score: bool, instruction: Optional[str] = None):
         raise NotImplementedError
 
-    def search(self, query: str, num: int = None, return_score: bool = False):
-        return self._search(query, num, return_score)
+    def search(self, query: str, num: int = None, return_score: bool = False, instruction: Optional[str] = None):
+        return self._search(query, num, return_score, instruction)
     
-    def batch_search(self, query_list: List[str], num: int = None, return_score: bool = False):
-        return self._batch_search(query_list, num, return_score)
+    def batch_search(self, query_list: List[str], num: int = None, return_score: bool = False, instruction: Optional[str] = None):
+        return self._batch_search(query_list, num, return_score, instruction)
 
 class BM25Retriever(BaseRetriever):
     def __init__(self, config):
@@ -184,7 +184,7 @@ class BM25Retriever(BaseRetriever):
     def _check_contain_doc(self):
         return self.searcher.doc(0).raw() is not None
 
-    def _search(self, query: str, num: int = None, return_score: bool = False):
+    def _search(self, query: str, num: int = None, return_score: bool = False, instruction: Optional[str] = None):
         if num is None:
             num = self.topk
         hits = self.searcher.search(query, num)
@@ -220,11 +220,11 @@ class BM25Retriever(BaseRetriever):
         else:
             return results
 
-    def _batch_search(self, query_list: List[str], num: int = None, return_score: bool = False):
+    def _batch_search(self, query_list: List[str], num: int = None, return_score: bool = False, instruction: Optional[str] = None):
         results = []
         scores = []
         for query in query_list:
-            item_result, item_score = self._search(query, num, True)
+            item_result, item_score = self._search(query, num, True, instruction)
             results.append(item_result)
             scores.append(item_score)
         if return_score:
@@ -441,8 +441,9 @@ class BGEReranker:
         self.max_length = max_length
         self.use_fp16 = use_fp16
         
-        # Load BGE reranker model
-        self.model = AutoModel.from_pretrained(model_path, trust_remote_code=True)
+        # Load BGE reranker model - use AutoModelForSequenceClassification
+        from transformers import AutoModelForSequenceClassification
+        self.model = AutoModelForSequenceClassification.from_pretrained(model_path, trust_remote_code=True)
         self.tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
         
         self.model.eval()
@@ -491,13 +492,9 @@ class BGEReranker:
                 max_length=self.max_length
             ).to('cuda')
             
-            # Get relevance scores
-            outputs = self.model(**inputs)
-            scores = outputs.last_hidden_state[:, 0]  # Use CLS token
-            
-            # For reranking, we typically use a linear layer or similarity score
-            # Here we use the norm of CLS token as relevance score
-            scores = torch.norm(scores, dim=-1)
+            # Get relevance scores using logits (correct BGE reranker approach)
+            outputs = self.model(**inputs, return_dict=True)
+            scores = outputs.logits.view(-1, ).float()
             scores = scores.cpu().numpy()
             all_scores.extend(scores)
         
@@ -717,7 +714,7 @@ class DenseRetriever(BaseRetriever):
         self.topk = config.retrieval_topk
         self.batch_size = config.retrieval_batch_size
 
-    def _search(self, query: str, num: int = None, return_score: bool = False):
+    def _search(self, query: str, num: int = None, return_score: bool = False, instruction: Optional[str] = None):
         if num is None:
             num = self.topk
             
@@ -732,7 +729,11 @@ class DenseRetriever(BaseRetriever):
         
         # Apply reranking if available
         if self.reranker and len(results) > 0:
-            results = self.reranker.rerank(query, results, top_k=num)
+            # Check if reranker supports instruction parameter
+            if isinstance(self.reranker, QwenReranker) and instruction:
+                results = self.reranker.rerank(query, results, top_k=num, instruction=instruction)
+            else:
+                results = self.reranker.rerank(query, results, top_k=num)
             # Recompute scores after reranking (optional)
             scores = scores[:len(results)]  # Adjust scores array
         
@@ -741,7 +742,7 @@ class DenseRetriever(BaseRetriever):
         else:
             return results
 
-    def _batch_search(self, query_list: List[str], num: int = None, return_score: bool = False):
+    def _batch_search(self, query_list: List[str], num: int = None, return_score: bool = False, instruction: Optional[str] = None):
         if isinstance(query_list, str):
             query_list = [query_list]
         if num is None:
@@ -770,7 +771,11 @@ class DenseRetriever(BaseRetriever):
                 reranked_batch_results = []
                 for i, (query, query_results) in enumerate(zip(query_batch, batch_results)):
                     if len(query_results) > 0:
-                        reranked_results = self.reranker.rerank(query, query_results, top_k=num)
+                        # Check if reranker supports instruction parameter
+                        if isinstance(self.reranker, QwenReranker) and instruction:
+                            reranked_results = self.reranker.rerank(query, query_results, top_k=num, instruction=instruction)
+                        else:
+                            reranked_results = self.reranker.rerank(query, query_results, top_k=num)
                         reranked_batch_results.append(reranked_results)
                         # Adjust scores
                         batch_scores[i] = batch_scores[i][:len(reranked_results)]
@@ -845,6 +850,7 @@ class QueryRequest(BaseModel):
     queries: List[str]
     topk: Optional[int] = None
     return_scores: bool = False
+    instruction: Optional[str] = None  # Add instruction for reranker
 
 
 app = FastAPI()
@@ -912,7 +918,8 @@ def retrieve_endpoint(request: QueryRequest):
     retrieval_result = retriever.batch_search(
         query_list=request.queries,
         num=request.topk,
-        return_score=request.return_scores
+        return_score=request.return_scores,
+        instruction=request.instruction
     )
     
     # Handle different return formats

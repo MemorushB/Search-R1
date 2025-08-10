@@ -66,7 +66,8 @@ class SearchR1Model:
                   topk: int = 15,
                   retrieval_server_url: str = "http://127.0.0.1:8000/retrieve",
                   temperature: float = 0.7,
-                  max_new_tokens: int = 4096) -> Tuple[str, str, Dict[str, Any]]:
+                  max_new_tokens: int = 4096,
+                  prompt_template: Optional[str] = None) -> Tuple[str, str, Dict[str, Any]]:
         """
         Run inference using the pre-loaded model
         """
@@ -94,8 +95,9 @@ class SearchR1Model:
         curr_eos = [151645, 151643]  # for Qwen2.5 series models
         curr_search_template = '\n\n{output_text}<information>{search_results}</information>\n\n'
         
-        # Prepare the prompt
-        prompt = f"""
+        # Prepare the prompt using provided template or default
+        if prompt_template is None:
+            prompt = f"""
         Answer the following legal question by clearly identifying the relevant guiding case law.
 
         Each time you receive new information, explicitly document your thought process within <think> … </think> tags.
@@ -123,8 +125,9 @@ class SearchR1Model:
         To determine if a surveillance measure falls under Article 8 of the ECHR, an applicant must first show the complaint relates to private/family life, home, or correspondence. Once established, the Court assesses if the measure interfered with this right or aligns with the State's positive obligations. Any interference must pursue a legitimate aim, be "in accordance with the law," and "necessary in a democratic society." To assess necessity, the Court balances competing interests. For instance, in terrorism cases, authorities must prove a fair balance was struck between individual rights under Article 8 § 1 and the State's need for effective prevention of terrorist crimes (*Murray v. the United Kingdom*, 1994, § 91).
         </answer>
 
-        Question: {question}
-"""
+        Question: {question}"""
+        else:
+            prompt = prompt_template.format(question=question)
 
         # Define stopping criterion
         class StopOnSequence(transformers.StoppingCriteria):
@@ -158,7 +161,10 @@ class SearchR1Model:
                 payload = {
                     "queries": [query],
                     "topk": topk,
-                    "return_scores": True
+                    "return_scores": True,
+                    "instruction": "Given a legal question about European Court of Human Rights jurisprudence, retrieve \
+                    relevant case documents and legal precedents that directly address the legal issues, principles, \
+                    and doctrines mentioned in the query."
                 }
                 response = requests.post(retrieval_server_url, json=payload, timeout=30)
                 response.raise_for_status()
@@ -326,7 +332,8 @@ def search_r1_inference(
     temperature: float = 0.7,
     max_new_tokens: int = 4096,
     use_quantization: bool = True,
-    quantization_bits: int = 8
+    quantization_bits: int = 8,
+    prompt_template: Optional[str] = None
 ) -> Tuple[str, str, Dict[str, Any]]:
     """
     Search-R1 inference function with model reuse
@@ -342,5 +349,6 @@ def search_r1_inference(
         topk=topk,
         retrieval_server_url=retrieval_server_url,
         temperature=temperature,
-        max_new_tokens=max_new_tokens
+        max_new_tokens=max_new_tokens,
+        prompt_template=prompt_template
     )

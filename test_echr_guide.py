@@ -31,6 +31,38 @@ except ImportError:
 from inference_engine import search_r1_inference, get_or_create_model
 
 
+# ECHR Guide-specific prompt template optimized for guide document retrieval
+ECHR_GUIDE_PROMPT_TEMPLATE = """
+Answer the following legal question about European human rights law by clearly identifying the relevant guiding principles and legal framework from the ECHR jurisprudence and official guidance documents.
+
+Each time you receive new information, explicitly document your thought process within <think> … </think> tags.
+
+If additional external information is required, clearly formulate your query as:
+<search> your precise query </search>
+
+The response will be returned as:
+<information> … </information>
+You may search repeatedly until satisfied with your factual basis.
+
+When sufficient information is gathered, draft your final response inside:
+<answer> … </answer>
+
+Guidelines for <answer>:
+1. Structure your response as a clear, well-reasoned paragraph addressing the legal framework and principles.
+2. Clearly identify which guiding principles and ECHR articles apply to each aspect of the question.
+3. Address every relevant legal sub-issue, including but not limited to: scope/interference, positive obligations, legality, legitimate aim, necessity, proportionality, safeguards, and balancing.
+4. Paraphrase the question—do not directly reuse wording from the prompt.
+5. Reference relevant ECHR guidance documents, legal principles, and illustrative Strasbourg cases with proper citations (e.g., *Case Name v. State*, date, § paragraph).
+
+Example Response:
+
+<answer>
+To determine if a surveillance measure falls under Article 8 of the ECHR, an applicant must first show the complaint relates to private/family life, home, or correspondence. Once established, the Court assesses if the measure interfered with this right or aligns with the State's positive obligations. Any interference must pursue a legitimate aim, be "in accordance with the law," and "necessary in a democratic society." To assess necessity, the Court balances competing interests. For instance, in terrorism cases, authorities must prove a fair balance was struck between individual rights under Article 8 § 1 and the State's need for effective prevention of terrorist crimes (*Murray v. the United Kingdom*, 1994, § 91).
+</answer>
+
+Question: {question}"""
+
+
 class ECHRTestEvaluator:
     """Evaluator for ECHR QA testing with guide matching and similarity scoring"""
     
@@ -438,13 +470,14 @@ class ECHRTestEvaluator:
         print(f"Target paragraphs: {target_paragraphs}")
         
         try:
-            # Run inference using preloaded model or standard function
+            # Run inference using preloaded model or standard function with ECHR Guide-specific prompt
             if self.preload_model and self.search_model:
                 # Use preloaded model
                 model_answer, log_path, metadata = self.search_model.inference(
                     question=question,
                     log_dir=os.path.join(self.results_dir, "logs"),
-                    topk=topk
+                    topk=topk,
+                    prompt_template=ECHR_GUIDE_PROMPT_TEMPLATE
                 )
             else:
                 # Fall back to standard function
@@ -452,7 +485,8 @@ class ECHRTestEvaluator:
                     question=question,
                     model_id=model_id,
                     log_dir=os.path.join(self.results_dir, "logs"),
-                    topk=topk
+                    topk=topk,
+                    prompt_template=ECHR_GUIDE_PROMPT_TEMPLATE
                 )
             
             # Extract clean answer
